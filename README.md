@@ -7,3 +7,5 @@ Lo scopo del progetto è implementare un file system con "pseudo" FAT tramite mm
 - Operazioni di lettura e scrittura su file
 - Elenco dei file contenuti in una directory
 - Spostamento tra directory differenti
+
+A cura di Karen Kolendowska, matricola 1937724
