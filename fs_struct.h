@@ -41,8 +41,8 @@ typedef struct {
     void *buffer_fs;  // buffer sul quale mappare i dati
 } FileSystem;
 
-int createFile(void *buffer_fs, const char *name, int file_size);
-int eraseFile(void *buffer_fs, const char *name);
+int createFile(FileSystem *fs, const char *name, int file_size);
+int eraseFile(FileSystem *fs, const char *name);
 int createDir(FileSystem *fs, const char *name);
 int eraseDir(FileSystem *fs, const char *name);
 int changeDir(FileSystem *fs, const char *dir);
