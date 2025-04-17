@@ -19,8 +19,8 @@ typedef struct {
     char name[16];
     int start_block;
     int size;
-    short is_used;
-    short is_directory;
+    int is_used;
+    int is_directory;
 } FileEntry;
 
 typedef struct {
