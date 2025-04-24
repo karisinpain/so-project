@@ -10,7 +10,9 @@
 
 #define FS_SIZE (1024 * 1024)  // 1 mb
 #define BLOCK_SIZE 512
-#define FAT_ENTRIES (FS_SIZE / BLOCK_SIZE)  // 256 byte
+#define BLOCK_ENTRIES (FS_SIZE/BLOCK_SIZE)
+#define ENTRIES_PER_BLOCK (BLOCK_SIZE/sizeof(FileEntry))
+#define FAT_ENTRIES 256
 #define MAX_FILES 128
 #define FAT_EOF -1
 #define FREE_BLOCK 0

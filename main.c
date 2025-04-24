@@ -48,13 +48,6 @@ int createFile(FileSystem *fs, const char *name, int file_size) {
             // memorizza il riferimento alla FAT entry
             fs->current_dir[i].start_block = fat_offset;
 
-            // trova uno spazio libero all'interno del blocco della FAT (blocchi 0 e 1)
-            int block_index = fat_offset / (BLOCK_SIZE / sizeof(FATEntry));
-            int offset = (fat_offset % (BLOCK_SIZE / sizeof(FATEntry))) * sizeof(FATEntry);
-
-            // debug
-            printf("File '%s' created in FAT entry %d (block %d, offset %d).\n", 
-                   name, fat_offset, block_index, offset);
             return 0;
         }
     }
@@ -104,68 +97,118 @@ int eraseFile(FileSystem* fs, const char *name) {
     return 0;
 }
 
-// creazione nuova subdirectory nella directory corrente (WORK IN PROGRESS)
-/* int createDir(FileSystem *fs, const char *name) {
+// funzioni ausiliari per createDir
+int getBlockFromPtr(FileSystem *fs, FileEntry *dir_ptr) {
+    uintptr_t offset = (uintptr_t)dir_ptr - (uintptr_t)fs->buffer_fs;
+    return offset / BLOCK_SIZE;
+}
+int findFreeDataBlockInBuffer(FileSystem *fs) {
+    for (int i = 10; i < BLOCK_ENTRIES; i++) {  // inizia dal blocco 10 (precedenti sono riservati per FAT e root)
+        FileEntry *block = (FileEntry *)(fs->buffer_fs + (i * BLOCK_SIZE));
+
+        // controlla se il blocco è libero
+        int block_is_free = 0;
+        for (int j = 0; j < MAX_FILES; j++) {
+            if (block[j].is_used == 1) {
+                block_is_free = -1;
+                break;
+            }
+        }
+
+        if (block_is_free == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// creazione nuova subdirectory nella directory corrente
+int createDir(FileSystem *fs, const char *name) {
+
+    // controlla che il nome sia valido
+    if (strlen(name) >= 16) {
+        printf("Error: name is too long.\n");
+        return -1;
+    }
+    
+    // controlla se esiste già una directory con lo stesso nome
+    for (int k = 0; k < MAX_FILES; k++) {
+        if (fs->current_dir[k].is_used && strcmp(fs->current_dir[k].name, name) == 0) {
+            printf("Error: Entry with name '%s' already exists.\n", name);
+            return -1;
+        }
+    }
+    
+    // cerca un posto disponibile nella directory corrente
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs->current_dir[i].is_used == 0) {
-            // Initialize new directory entry in current directory
-            strcpy(fs->current_dir[i].name, name);
-            fs->current_dir[i].is_used = 1;
-            fs->current_dir[i].is_directory = 1;
-
-            // Find a free block in the data region (starting at block 10)
-            int new_block = -1;
-            for (int j = 10; j < FAT_ENTRIES; j++) {
+            // trova un'entry FAT libera
+            int fat_offset = -1;
+            for (int j = 0; j < FAT_ENTRIES; j++) {
                 if (fs->fat[j].next_block == FREE_BLOCK) {
-                    new_block = j;
-                    fs->fat[j].next_block = FAT_EOF;
+                    fat_offset = j;
 
-                    fs->current_dir[i].start_block = new_block;
+                    // inizializza la nuova directory
+                    strcpy(fs->current_dir[i].name, name);
+                    fs->current_dir[i].is_used = 1;
+                    fs->current_dir[i].is_directory = 1;
+                    fs->current_dir[i].start_block = fat_offset;
+                    fs->current_dir[i].size = 0;
 
-                    // Calculate pointer to new directory's block in memory
-                    FileEntry *new_dir = (FileEntry *)(fs->buffer_fs + (new_block * BLOCK_SIZE));
-                    memset(new_dir, 0, MAX_FILES * sizeof(FileEntry));
+                    // trova un blocco dati libero da assegnare alla nuova directory
+                    int dir_block = findFreeDataBlockInBuffer(fs);
+                    if (dir_block == -1) {
+                        printf("No free data blocks for directory.\n");
+                        return -1;
+                    }
+                    fs->fat[dir_block].next_block = FAT_EOF;
 
+                    // inizializza il blocco per la directory
+                    FileEntry *new_dir = (FileEntry *)(fs->buffer_fs + (dir_block * BLOCK_SIZE));
+                    memset(new_dir, 0, BLOCK_SIZE);
+
+                    fs->fat[j].next_block = dir_block;
+                    
                     // "." entry (self)
                     strcpy(new_dir[0].name, name);
                     new_dir[0].is_used = 1;
                     new_dir[0].is_directory = 1;
-                    new_dir[0].start_block = new_block;
+                    new_dir[0].start_block = fat_offset;
+                    new_dir[0].size = 0;
 
                     // ".." entry (parent)
+                    int parent_block = getBlockFromPtr(fs, fs->current_dir);
+
                     strcpy(new_dir[1].name, "..");
                     new_dir[1].is_used = 1;
                     new_dir[1].is_directory = 1;
-                    new_dir[1].start_block = fs->current_dir->start_block;
-
-                    // After creating the directory, the current directory should still point to the root or the current directory.
-                    printf("Directory '%s' created successfully in block %d.\n", name, new_block);
-
-                    // **FIX**: Ensure current_dir points to the new directory's block
-                    fs->current_dir = new_dir;  // Update the current directory to the new directory
-
+                    new_dir[1].start_block = parent_block;
+                    new_dir[1].size = 0;
                     return 0;
                 }
             }
-
-            // No free data block found
             printf("Error: No free data block available for directory '%s'.\n", name);
             return -1;
         }
     }
-
-    // No space left in current directory
     printf("Error: No free slot in current directory for '%s'.\n", name);
     return -1;
-} */
+}
 
 // elenca contenuti della directory corrente
 void listDir(FileSystem *fs) {
     int n = 0;
     printf("Contents of directory '%s':\n", fs->current_dir->name);
-    for (int i=0; i<MAX_FILES; i++) {
-        if (fs->current_dir[i].is_used) {
-            printf("%s\n", fs->current_dir[i].name);
+
+    int fat_entry = fs->current_dir[0].start_block;
+    int data_block = fs->fat[fat_entry].next_block;
+
+    FileEntry *dir_entries = (FileEntry *)(fs->buffer_fs + data_block * BLOCK_SIZE);
+
+    for (int i=0; i<ENTRIES_PER_BLOCK; i++) {
+        if (dir_entries[i].is_used) {
+            printf("%s\n", dir_entries[i].name);
             n++;
         }
     }
@@ -173,16 +216,17 @@ void listDir(FileSystem *fs) {
     return;
 }
 
-// cambia directory (WORK IN PROGRESS)
-/* int changeDir(FileSystem *fs, const char *name) {
-    // Handle root directory
+// cambia directory
+int changeDir(FileSystem *fs, const char *name) {
+
+    // root directory
     if (strcmp(name, "/") == 0) {
         fs->current_dir = fs->root;
         printf("Changed to root directory.\n");
         return 0;
     }
 
-    // Handle parent directory ("..")
+    // parent directory ("..")
     if (strcmp(name, "..") == 0) {
         // If we're already at the root, we cannot go up
         if (fs->current_dir == fs->root) {
@@ -190,44 +234,41 @@ void listDir(FileSystem *fs) {
             return -1;
         }
 
-        // Retrieve the parent directory block from the ".." entry (index 1)
         int parent_block = fs->current_dir[1].start_block;
-
-        // Validate the parent block
         if (parent_block < 0 || parent_block >= FAT_ENTRIES) {
             printf("Error: Invalid parent block.\n");
             return -1;
         }
 
-        // Retrieve the parent directory's entries (block)
+        // trova il blocco dati corrispondente alla directory
         FileEntry *parent_dir = (FileEntry *)(fs->buffer_fs + (parent_block * BLOCK_SIZE));
 
-        // Ensure the directory is valid
+        // controlla che la directory sia valida
         if (parent_dir == NULL) {
             printf("Error: Failed to access parent directory.\n");
             return -1;
         }
 
-        // Update current_dir to the parent directory
         fs->current_dir = parent_dir;
 
         printf("Changed to parent directory.\n");
         return 0;
     }
 
-    // Handle specific subdirectory change
+    // subdirectory con nome specifico
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs->current_dir[i].is_used && fs->current_dir[i].is_directory && strcmp(fs->current_dir[i].name, name) == 0) {
-            int block = fs->current_dir[i].start_block;
+            int entry = fs->current_dir[i].start_block;
+            int data_block = fs->fat[entry].next_block;
+            printf("FAT entry number %d, data block number %d.\n", entry, data_block);
 
-            // Validate block index
-            if (block < 0 || block >= FAT_ENTRIES) {
+            if (data_block < 0) {
                 printf("Error: Invalid directory block.\n");
                 return -1;
             }
 
-            // Retrieve the new directory's block and update current_dir
-            FileEntry *new_dir = (FileEntry *)(fs->buffer_fs + (block * BLOCK_SIZE));
+            // trova il blocco corrispondente alla directory
+            FileEntry *new_dir = (FileEntry *)(fs->buffer_fs + (data_block * BLOCK_SIZE));
             fs->current_dir = new_dir;
 
             printf("Changed directory to '%s'.\n", name);
@@ -237,7 +278,7 @@ void listDir(FileSystem *fs) {
 
     printf("Error: Directory '%s' not found.\n", name);
     return -1;
-} */
+}
 
 // chiusura e uscita dal file system
 void cleanup(FileSystem *fs) {
@@ -246,7 +287,7 @@ void cleanup(FileSystem *fs) {
         perror("Error unmapping memory.");
     if (close(fs->fs_fd) == -1)
         perror("Error closing file descriptor of the file system.");
-    printf("File system closed succesfully.\n");
+    printf("File system closed successfully.\n");
     exit(0);
 }
 
@@ -269,8 +310,20 @@ void processCommand(FileSystem *fs, const char *input) {
         else
             printf("To use this command: rm <filename>\n");
     }
+    else if (strcmp(command, "mkdir") == 0) {
+        if (n == 2)
+            createDir(fs, arg1);
+        else
+            printf("To use this command: mkdir <directoryname>");
+    }
     else if (strcmp(command, "ls") == 0)
         listDir(fs);
+    else if (strcmp(command, "cd") == 0) {
+        if (n == 2)
+            changeDir(fs, arg1);
+        else
+            printf("To use this command: cd <directory> (or ..)");
+    }
     else
         printf("Command unkown or not implemented yet.\n");
 }
@@ -306,14 +359,18 @@ int main() {
     fs.root = (FileEntry *)(fs.buffer_fs + (FAT_ENTRIES * sizeof(FATEntry)));
     fs.current_dir = fs.root;
 
-    // Inizializza FAT e root directory
+    int root_block = (FAT_ENTRIES * sizeof(FATEntry)) / BLOCK_SIZE;
+
+    // inizializza FAT e root directory
     memset(fs.fat, 0, FAT_ENTRIES * sizeof(FATEntry));
     memset(fs.root, 0, MAX_FILES * sizeof(FileEntry));
 
     fs.root[0].is_used = 1;
     fs.root[0].is_directory = 1;
     strcpy(fs.root[0].name, "/");
-    fs.root[0].start_block = -1;
+    fs.root[0].start_block = 0;
+    fs.fat[0].next_block = root_block;
+
 
     char input[128];
     while(1) {
