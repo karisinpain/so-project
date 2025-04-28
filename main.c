@@ -56,7 +56,7 @@ int createFile(FileSystem *fs, const char *name, int file_size) {
     return -1;
 }
 
-// cancella un file dalla directory corrente
+// elimina un file dalla directory corrente
 int eraseFile(FileSystem* fs, const char *name) {
     // trova il file nella directory
     int file_index = -1;
@@ -196,6 +196,69 @@ int createDir(FileSystem *fs, const char *name) {
     return -1;
 }
 
+// elimina una directory
+int eraseDir(FileSystem *fs, const char *name) {
+    if (strcmp(name, "..") == 0 || strcmp(name, "/") == 0) { 
+        printf("Impossibile eliminare root e/o directory di riferimento.\n");
+        return -1;
+    }
+
+    int dir_index = -1;
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (fs->current_dir[i].is_used && strcmp(fs->current_dir[i].name, name) == 0) {
+            dir_index = i;
+            break;
+        }
+    }
+    if (dir_index == -1) {
+        printf("Error: Directory '%s' not found.\n", name);
+        return -1;
+    }
+    if (fs->current_dir[dir_index].is_directory == 0) {
+        printf("Error: you can't delete a file with 'rmdir' command (use 'rm').\n");
+        return -1;
+    }
+
+    // prendiamo il primo blocco dati assegnato alla directory
+    int fat_entry = fs->current_dir[dir_index].start_block;
+    int data_block = fs->fat[fat_entry].next_block;
+
+    // controlla che la directory sia vuota
+    while (data_block != FAT_EOF) {
+        FileEntry *dir_entries = (FileEntry *)(fs->buffer_fs + data_block * BLOCK_SIZE);
+        // ciclo per ogni blocco di dati della directory
+        for (int i=2; i<ENTRIES_PER_BLOCK; i++) {   // le prime due entry sono riservate ai riferimenti della directory stessa e della directory parent
+            if (dir_entries[i].is_used) {
+                printf("Impossibile eliminare la directory '%s' dato che contiene ancora dei file. Svuotare la directory prima di procedere con l'eliminazione.\n", name);
+                return -1;
+            }
+        }
+        // finito il controllo per un blocco, controlla se ci sono altri blocchi di dati da esaminare
+        data_block = fs->fat[data_block].next_block;
+    }
+
+    // libera i blocchi nella FAT
+    int block = fs->current_dir[dir_index].start_block;
+    while (block != FAT_EOF) {
+        int next_block = fs->fat[block].next_block;
+        fs->fat[block].next_block = FREE_BLOCK;
+        
+        // calcola l'offset per la FAT entry
+        int fat_offset = (block * sizeof(FATEntry)) % BLOCK_SIZE;
+        FATEntry *fat_entry = (FATEntry *)(fs->buffer_fs + (block / (BLOCK_SIZE / sizeof(FATEntry))) * BLOCK_SIZE + fat_offset);
+        memset(fat_entry, 0, sizeof(FATEntry));
+        
+        block = next_block;
+    }
+
+    // cancella l'entry della directory
+    memset(&fs->current_dir[dir_index], 0, sizeof(FileEntry));
+    
+    printf("Directory '%s' deleted successfully.\n", name);
+    return 0;    
+    
+}
+
 // elenca contenuti della directory corrente
 void listDir(FileSystem *fs) {
     int n = 0;
@@ -204,21 +267,25 @@ void listDir(FileSystem *fs) {
     int fat_entry = fs->current_dir[0].start_block;
     int data_block = fs->fat[fat_entry].next_block;
 
-    FileEntry *dir_entries = (FileEntry *)(fs->buffer_fs + data_block * BLOCK_SIZE);
-
-    for (int i=0; i<ENTRIES_PER_BLOCK; i++) {
-        if (dir_entries[i].is_used) {
-            printf("%s\n", dir_entries[i].name);
-            n++;
+    while (data_block != FAT_EOF) {
+        FileEntry *dir_entries = (FileEntry *)(fs->buffer_fs + data_block * BLOCK_SIZE);
+        // ciclo per ogni blocco di dati della directory
+        for (int i=0; i<ENTRIES_PER_BLOCK; i++) {
+            if (dir_entries[i].is_used) {
+                printf("%s\n", dir_entries[i].name);
+                n++;
+            }
         }
+        // finito il controllo per un blocco, controlla se ci sono altri blocchi di dati da esaminare
+        data_block = fs->fat[data_block].next_block;
     }
+
     if (n==0) printf("Current directory is empty.\n");
     return;
 }
 
 // cambia directory
 int changeDir(FileSystem *fs, const char *name) {
-
     // root directory
     if (strcmp(name, "/") == 0) {
         fs->current_dir = fs->root;
@@ -314,7 +381,13 @@ void processCommand(FileSystem *fs, const char *input) {
         if (n == 2)
             createDir(fs, arg1);
         else
-            printf("To use this command: mkdir <directoryname>");
+            printf("To use this command: mkdir <directoryname>\n");
+    }
+    else if (strcmp(command, "rmdir") == 0) {
+        if (n == 2)
+            eraseDir(fs, arg1);
+        else
+            printf("To use this command: rmdir <directoryname>\n");
     }
     else if (strcmp(command, "ls") == 0)
         listDir(fs);
@@ -370,6 +443,7 @@ int main() {
     strcpy(fs.root[0].name, "/");
     fs.root[0].start_block = 0;
     fs.fat[0].next_block = root_block;
+    fs.fat[root_block].next_block = FAT_EOF;
 
 
     char input[128];
