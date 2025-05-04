@@ -52,6 +52,8 @@ void listDir(FileSystem *fs);
 void processCommand(FileSystem *fs, const char *input);
 void cleanup(FileSystem *fs);
 
+FileHandle current_open_file = { .index = -1, .file_pos = 0, .block_pos = 0 };
+
 // TO IMPLEMENT:
 // write (potentially extending the file boundaries)
 // read
