@@ -110,7 +110,7 @@ int findFreeDataBlockInBuffer(FileSystem *fs) {
                 if (fs->fat[fat_index].next_block == 0 && fat_index != data_block) {
                     fs->fat[fat_index].next_block = data_block;
                     fs->fat[data_block].next_block = FAT_EOF;
-                    printf("Found new data block %d, with fat entry %d.\n", data_block, fat_index);
+                    printf("Found new data block %d, with FAT entry %d.\n", data_block, fat_index);
                     return fat_index;
                 }
             }
@@ -156,18 +156,19 @@ int createDir(FileSystem *fs, const char *name) {
                     fs->current_dir[i].size = 0;
 
                     // trova un blocco dati libero da assegnare alla nuova directory
-                    int dir_block = findFreeDataBlockInBuffer(fs);
-                    if (dir_block == -1) {
+                    int fat_index = findFreeDataBlockInBuffer(fs);
+                    if (fat_index == -1) {
                         printf("No free data blocks for directory.\n");
                         return -1;
                     }
-                    fs->fat[dir_block].next_block = FAT_EOF;
+
+                    int data_block = fs->fat[fat_index].next_block;
 
                     // inizializza il blocco per la directory
-                    FileEntry *new_dir = (FileEntry *)(fs->buffer_fs + (dir_block * BLOCK_SIZE));
+                    FileEntry *new_dir = (FileEntry *)(fs->buffer_fs + (data_block * BLOCK_SIZE));
                     memset(new_dir, 0, BLOCK_SIZE);
 
-                    fs->fat[j].next_block = dir_block;
+                    fs->fat[j].next_block = data_block;
                     
                     // "." entry (self)
                     strcpy(new_dir[0].name, name);
@@ -327,7 +328,6 @@ int changeDir(FileSystem *fs, const char *name) {
         if (fs->current_dir[i].is_used && fs->current_dir[i].is_directory && strcmp(fs->current_dir[i].name, name) == 0) {
             int entry = fs->current_dir[i].start_block;
             int data_block = fs->fat[entry].next_block;
-            printf("FAT entry number %d, data block number %d.\n", entry, data_block);
 
             if (data_block < 0) {
                 printf("Error: Invalid directory block.\n");
