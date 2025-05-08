@@ -103,14 +103,13 @@ int getBlockFromPtr(FileSystem *fs, FileEntry *dir_ptr) {
     return offset / BLOCK_SIZE;
 }
 int findFreeDataBlockInBuffer(FileSystem *fs) {
-    for (int data_block = 10; data_block < BLOCK_ENTRIES; data_block++) {
+    for (int data_block = 10; data_block < BLOCK_ENTRIES; data_block++) {  // i primi 10 blocchi del file system sono riservati per la FAT e la root directory
         if (fs->fat[data_block].next_block == FREE_BLOCK) {
             // trova un blocco libero
             for (int fat_index = 0; fat_index < BLOCK_ENTRIES; fat_index++) {
                 if (fs->fat[fat_index].next_block == 0 && fat_index != data_block) {
                     fs->fat[fat_index].next_block = data_block;
                     fs->fat[data_block].next_block = FAT_EOF;
-                    printf("Found new data block %d, with FAT entry %d.\n", data_block, fat_index);
                     return fat_index;
                 }
             }
@@ -122,7 +121,7 @@ int findFreeDataBlockInBuffer(FileSystem *fs) {
     return -1;
 }
 
-// creazione nuova subdirectory nella directory corrente (NEED FIX AFTER UPDATE)
+// creazione nuova subdirectory nella directory corrente
 int createDir(FileSystem *fs, const char *name) {
 
     // controlla che il nome sia valido
@@ -270,7 +269,7 @@ void listDir(FileSystem *fs) {
     while (data_block != FAT_EOF) {
         FileEntry *dir_entries = (FileEntry *)(fs->buffer_fs + data_block * BLOCK_SIZE);
         // ciclo per ogni blocco di dati della directory
-        printf("reading block %d.\n", data_block);
+        printf("(reading block %d)\n", data_block);
         for (int i=0; i<ENTRIES_PER_BLOCK; i++) {
             if (dir_entries[i].is_used) {
                 printf("%s\n", dir_entries[i].name);
@@ -287,6 +286,10 @@ void listDir(FileSystem *fs) {
 
 // cambia directory
 int changeDir(FileSystem *fs, const char *name) {
+    if (current_open_file.index != -1) {
+        printf("Error: open file '%s' detected. Please close it before changing directory.\n", fs->current_dir[current_open_file.index].name);
+        return -1;
+    }
     // root directory
     if (strcmp(name, "/") == 0) {
         fs->current_dir = fs->root;
@@ -354,11 +357,17 @@ FileHandle openFile(FileSystem *fs, const char *name) {
     fh.file_pos = 0;
     fh.block_pos = 0;
 
+    if (current_open_file.index != -1) {
+        printf("Error: file '%s' is currently open, please close the file before opening a new one.\n", fs->current_dir[current_open_file.index].name);
+        return current_open_file;
+    }
+
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs->current_dir[i].is_used &&
             !fs->current_dir[i].is_directory &&
             strcmp(fs->current_dir[i].name, name) == 0) {
             fh.index = i;
+            printf("Opened file '%s'.\n", name);
             return fh;
         }
     }
@@ -400,7 +409,7 @@ int writeFile(FileSystem *fs, FileHandle *fh, const void *buffer, int size) {
         return -1;
     }
 
-    printf("Start at FAT %d → data block %d\n", fat_index, block);
+    printf("Start at FAT %d -> data block %d\n", fat_index, block);
 
     // Navigate to correct block for file_pos
     int offset_in_file = fh->file_pos;
@@ -508,7 +517,6 @@ int readFile(FileSystem *fs, FileHandle *fh, void *buffer, int size) {
     return bytes_read;
 }
 
-
 // punta ad una posizione specifica nel file
 int seekFile(FileSystem *fs, FileHandle *fh, int position) {
     if (fh->index == -1) {
@@ -593,11 +601,8 @@ void processCommand(FileSystem *fs, const char *input) {
             printf("To use this command: cd <directory> (or ..)");
     }
     else if (strcmp(command, "open") == 0) {
-        if (n == 2) {
+        if (n == 2)
             current_open_file = openFile(fs, arg1);
-            if (current_open_file.index != -1)
-                printf("Opened file '%s'.\n", arg1);
-        }
         else
             printf("To use this command: open <filename>\n");
     }
@@ -639,6 +644,8 @@ void processCommand(FileSystem *fs, const char *input) {
             if (bytes_read > 0) {
                 buffer[bytes_read] = '\0'; 
                 printf("Read %d bytes: %s\n", bytes_read, buffer);
+            } else if (bytes_read == 0) {
+                printf("Reached end of the file. To read from beginning use command 'seek 0'.\n");
             } else {
                 printf("Error: Could not read the file.\n");
             }
@@ -702,7 +709,7 @@ int main() {
     fs.fat[0].next_block = FAT_EOF;
     fs.fat[1].next_block = root_block;
     fs.fat[root_block].next_block = FAT_EOF;
-    for (int i=2; i < FAT_ENTRIES; i++)
+    for (int i=3; i < FAT_ENTRIES; i++)
         fs.fat[i].next_block = FREE_BLOCK;
 
     char input[128];
